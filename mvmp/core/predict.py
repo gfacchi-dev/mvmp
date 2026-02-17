@@ -86,7 +86,7 @@ def cluster_consensus(points, eps=0.01):
     return np.mean(cluster_points, axis=0)
 
 
-def __predict(meshes, projections_number, args=None, camera_angles=None, verbose=True):
+def __predict(meshes, projections_number, args=None, camera_angles=None, verbose=True, debug_output_dir=None, camera_distance_multiplier=1.0):
     """Core prediction function.
 
     Args:
@@ -96,6 +96,8 @@ def __predict(meshes, projections_number, args=None, camera_angles=None, verbose
         camera_angles: Optional list of (yaw, pitch) tuples in degrees.
                        If provided, projections_number is ignored.
         verbose: If True, print progress to stdout
+        debug_output_dir: Optional path to save debug renders (plain + landmarks)
+        camera_distance_multiplier: Multiplier for camera distance (default: 1.0, use <1.0 to get closer)
     """
     mesh = meshes["mesh"]
     mesh_t = meshes["tensor"]
@@ -132,7 +134,7 @@ def __predict(meshes, projections_number, args=None, camera_angles=None, verbose
 
     bbox = mesh.get_axis_aligned_bounding_box()
     mesh_radius = np.linalg.norm(bbox.get_extent()) / 2
-    camera_distance = mesh_radius / np.tan(fov_rad / 2)
+    camera_distance = (mesh_radius / np.tan(fov_rad / 2)) * camera_distance_multiplier
 
     renderer.scene.camera.set_projection(
         FOV_DEG, 1.0,
@@ -169,6 +171,10 @@ def __predict(meshes, projections_number, args=None, camera_angles=None, verbose
     landmark_candidates = {i: [] for i in range(478)}
     detection_count = 0
 
+    # Create debug output directory if requested
+    if debug_output_dir:
+        os_module.makedirs(debug_output_dir, exist_ok=True)
+
     if verbose:
         print(f"Projecting {projections_number} views...", flush=True)
 
@@ -176,11 +182,22 @@ def __predict(meshes, projections_number, args=None, camera_angles=None, verbose
         if verbose and idx > 0 and idx % 50 == 0:
             print(f"  {idx}/{projections_number} ({detection_count} detections)", flush=True)
 
+        # Get yaw and pitch for this camera
+        yaw_deg = np.degrees(y_rots[idx])
+        pitch_deg = np.degrees(x_rots[idx])
+
         camera_pos = (camera_r @ np.array([0, 0, 1])) * camera_distance
         up = camera_r @ np.array([0, 1, 0])
         renderer.scene.camera.look_at([0, 0, 0], camera_pos.tolist(), up.tolist())
 
         img = np.asarray(renderer.render_to_image())[:, :, :3]
+
+        # Save plain render if debug mode
+        if debug_output_dir:
+            from PIL import Image
+            Image.fromarray(img).save(
+                os_module.path.join(debug_output_dir, f"render_yaw{yaw_deg:+06.1f}_pitch{pitch_deg:+06.1f}.png")
+            )
 
         detection_result = detector.detect(mpImage(img))
 
@@ -188,6 +205,23 @@ def __predict(meshes, projections_number, args=None, camera_angles=None, verbose
             continue
 
         detection_count += 1
+
+        # Save render with landmarks if debug mode
+        if debug_output_dir:
+            from PIL import Image, ImageDraw
+            img_debug = img.copy()
+            pil_img = Image.fromarray(img_debug)
+            draw = ImageDraw.Draw(pil_img)
+
+            # Draw 2D landmarks
+            for landmark in detection_result.face_landmarks[0]:
+                x = int(landmark.x * IMG_SIZE)
+                y = int(landmark.y * IMG_SIZE)
+                draw.ellipse([x-2, y-2, x+2, y+2], fill=(0, 255, 0))
+
+            pil_img.save(
+                os_module.path.join(debug_output_dir, f"landmarks_yaw{yaw_deg:+06.1f}_pitch{pitch_deg:+06.1f}.png")
+            )
 
         mp_mesh = o3d.t.geometry.TriangleMesh(
             o3d.core.Tensor([[p.x, -p.y, -p.z] for p in detection_result.face_landmarks[0]], dtype=o3d.core.Dtype.Float32),

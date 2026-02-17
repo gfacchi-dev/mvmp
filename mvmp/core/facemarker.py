@@ -66,7 +66,7 @@ class Facemarker:
         >>> result = marker.predict("path/to/mesh.obj")
     """
 
-    def __init__(self, projections=100, camera_angles=None, verbose=True):
+    def __init__(self, projections=100, camera_angles=None, verbose=True, debug_output_dir=None, camera_distance_multiplier=1.0):
         """
         Args:
             projections: Number of random projections (default: 100).
@@ -75,10 +75,14 @@ class Facemarker:
                           Example: [(0, 0), (10, -5), (-15, 10)]
                           Yaw = left/right rotation, Pitch = up/down rotation.
             verbose: Print progress messages (default: True)
+            debug_output_dir: Optional path to save debug renders (plain + landmarks)
+            camera_distance_multiplier: Multiplier for camera distance (default: 1.0, use <1.0 to get closer)
         """
         self.projections = projections
         self.camera_angles = camera_angles
         self.verbose = verbose
+        self.debug_output_dir = debug_output_dir
+        self.camera_distance_multiplier = camera_distance_multiplier
 
         # Suppress Open3D warnings during mesh I/O
         o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
@@ -100,7 +104,8 @@ class Facemarker:
         meshes = meshes_setup(meshes, auto_align=True)
 
         landmarks_3d, closest_vertices_ids, camera_data, landmark_candidates = _predict_impl(
-            meshes, self.projections, camera_angles=self.camera_angles, verbose=self.verbose
+            meshes, self.projections, camera_angles=self.camera_angles, verbose=self.verbose,
+            debug_output_dir=self.debug_output_dir, camera_distance_multiplier=self.camera_distance_multiplier
         )
 
         if landmarks_3d is None or closest_vertices_ids is None:
