@@ -157,8 +157,8 @@ def __predict(meshes, projections_number, args=None, camera_angles=None, verbose
         y_rots = np.radians(camera_angles[:, 0])  # yaw
         projections_number = len(camera_angles)
     else:
-        # Yaw: -30 to +30 degrees, Pitch: -50 to +20 degrees
-        y_rots = np.random.uniform(-np.pi/6, np.pi/6, projections_number)
+        # Yaw: -60 to +60 degrees, Pitch: -50 to +20 degrees
+        y_rots = np.random.uniform(-np.pi/3, np.pi/3, projections_number)
         x_rots = np.random.uniform(-5*np.pi/18, np.pi/9, projections_number)
 
     camera_rots = [
