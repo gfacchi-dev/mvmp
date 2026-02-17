@@ -315,7 +315,7 @@ def __predict(meshes, projections_number, args=None, camera_angles=None, verbose
     mesh_path = meshes["mesh_path"]
     abs_mesh_path = os_module.path.abspath(mesh_path)
 
-    actual_mesh = o3d.io.read_triangle_mesh(abs_mesh_path, enable_post_processing=True)
+    actual_mesh = o3d.io.read_triangle_mesh(abs_mesh_path, enable_post_processing=False)
 
     scale = meshes["transform_scale"]
     center = meshes["transform_center"]
