@@ -13,7 +13,7 @@ def import_mesh(filename):
     abs_path = os.path.abspath(filename)
 
     try:
-        textured_mesh = o3d.io.read_triangle_mesh(abs_path, enable_post_processing=True)
+        textured_mesh = o3d.io.read_triangle_mesh(abs_path, enable_post_processing=False)
     except Exception as e:
         raise RuntimeError(f"Error importing mesh: {e}")
 
