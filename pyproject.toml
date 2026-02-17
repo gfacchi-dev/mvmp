@@ -27,9 +27,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/meminz/3d_face_landmarker"
-Repository = "https://github.com/meminz/3d_face_landmarker"
-Issues = "https://github.com/meminz/3d_face_landmarker/issues"
+Homepage = "https://github.com/gfacchi-dev/mvmp"
+Repository = "https://github.com/gfacchi-dev/mvmp"
+Issues = "https://github.com/gfacchi-dev/mvmp/issues"
 
 [project.scripts]
 mvmp = "mvmp.cli:main"

@@ -4,7 +4,7 @@
 
 ## Description
 
-MVMP (Multi-View MediaPipe) is a lightweight tool for 3D facial landmark detection on static textured meshes. It renders multiple camera views of the mesh, detects 2D landmarks with MediaPipe, and backprojects them into 3D space through consensus-based triangulation. The result is 478 facial landmarks aligned with the 3D mesh geometry.
+MVMP (Multi-View MediaPipe) is a lightweight tool for 3D facial landmark detection on static textured meshes. It renders multiple camera views of the mesh, detects 2D landmarks with MediaPipe, and backprojects them into 3D space through DBSCAN-based consensus triangulation. The result is 478 facial landmarks aligned with the 3D mesh geometry, with robust outlier rejection.
 
 <!--![alt text](./img/pipelineOverview.png)-->
 <img src="./img/pipelineOverview.png">
@@ -20,8 +20,8 @@ The MediaPipe Face Landmarker model is bundled in the package.
 ### From Source
 
 ```bash
-git clone https://github.com/meminz/3d_face_landmarker.git
-cd 3d_face_landmarker
+git clone https://github.com/gfacchi-dev/mvmp.git
+cd mvmp
 pip install .
 ```
 
@@ -40,7 +40,7 @@ result = marker.predict("path/to/mesh.obj")
 print(result)  # FacemarkerResult(478 landmarks, 478 vertex indices)
 
 # Access results
-landmarks_3d = result.landmarks_3d          # list of [x, y, z] coordinates
+landmarks_3d = result.landmarks_3d          # list of [x, y, z] coordinates (original scale)
 vertex_indices = result.closest_vertices_ids  # closest mesh vertex per landmark
 
 # Save to JSON
@@ -102,14 +102,12 @@ mvmp meshes/ -p 200 -o results/
 
 ### Output Format
 
+JSON output contains coordinates at the original mesh scale:
+
 ```json
 {
-  "normalized_coordinates": [[x, y, z], ...],
-  "closest_vertex_indexes": [idx1, idx2, ...],
-  "transform_params": {
-    "center": [x, y, z],
-    "scale": 0.003
-  }
+  "coordinates": [[x, y, z], ...],
+  "closest_vertex_indexes": [idx1, idx2, ...]
 }
 ```
 
@@ -129,4 +127,4 @@ mvmp meshes/ -p 200 -o results/
 
 ## Contact
 
-Questions or suggestions? Open an issue on [GitHub](https://github.com/meminz/3d_face_landmarker/issues).
+Questions or suggestions? Open an issue on [GitHub](https://github.com/gfacchi-dev/mvmp/issues).
