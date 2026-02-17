@@ -1,0 +1,49 @@
+[project]
+name = "mvmp"
+version = "0.2.1"
+description = "3D Multi-View MediaPipe - Facial landmark detection for 3D meshes"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Giuseppe Facchi", email = "giuseppe.facchi@outlook.com"}
+]
+keywords = ["face", "landmarks", "3d", "mediapipe", "mesh"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = [
+    "mediapipe>=0.10.14",
+    "numpy>=1.26.0,<2.0",
+    "open3d>=0.18.0",
+    "opencv-python>=4.11.0.86",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.11.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/meminz/3d_face_landmarker"
+Repository = "https://github.com/meminz/3d_face_landmarker"
+Issues = "https://github.com/meminz/3d_face_landmarker/issues"
+
+[project.scripts]
+mvmp = "mvmp.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff"]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mvmp*"]
+
+[tool.setuptools.package-data]
+mvmp = ["*.task"]

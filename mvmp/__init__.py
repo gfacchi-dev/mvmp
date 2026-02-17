@@ -1,0 +1,9 @@
+"""
+MVMP: 3D Multi-View MediaPipe
+Facial landmark detection for 3D meshes
+"""
+
+from .core.facemarker import Facemarker, FacemarkerResult
+
+__version__ = "0.1.0"
+__all__ = ["Facemarker", "FacemarkerResult"]

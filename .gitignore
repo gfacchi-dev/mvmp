@@ -1,0 +1,25 @@
+__pycache__
+.landmarker_env
+.venv
+
+# Exclude model files in root (but keep in mvmp/ package)
+/face_*.task
+
+output_backup/
+output_ric/
+Ric/
+RicVectra*
+
+TemplateColored/
+tmp_mesh_previews/
+
+debug*
+
+# Build artifacts
+*.egg
+*.egg-info
+dist/
+build/
+*.pyc
+.pytest_cache/
+.test-env/
