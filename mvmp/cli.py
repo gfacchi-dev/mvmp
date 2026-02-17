@@ -15,15 +15,19 @@ def main():
     """Main CLI entry point"""
     args = parse_args()
 
+    # Supported mesh formats
+    MESH_EXTENSIONS = ('.obj', '.ply', '.stl', '.gltf', '.glb', '.off')
+
     to_process = []
     if os.path.isdir(args.path):
         for r, _, files in os.walk(args.path):
             for f in files:
-                if f.lower().endswith(".obj"):
+                if f.lower().endswith(MESH_EXTENSIONS):
                     to_process.append(os.path.join(r, f))
     else:
-        if not args.path.endswith(".obj"):
-            print(f"Error: {args.path} is not an .obj file. Only .obj meshes are supported")
+        if not args.path.lower().endswith(MESH_EXTENSIONS):
+            print(f"Error: {args.path} is not a supported mesh file.")
+            print(f"Supported formats: {', '.join(MESH_EXTENSIONS)}")
             sys.exit(1)
         to_process.append(args.path)
 

@@ -1,11 +1,11 @@
 import argparse
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Process a single .obj file (default mode) or all .obj files in a folder or children folders (--folder or -F)."
+        description="Process a single mesh file or all mesh files in a folder or children folders. Supports .obj, .ply, .stl, .gltf, .glb, .off formats."
     )
-    
+
     parser.add_argument("path", nargs='?', default="/var/datasets/LAFAS-84Aligned/raw", help=(
-        "Path to a single .obj file (default) or a folder to be accessed recursively. Default: /var/datasets/LAFAS-84Aligned/raw"
+        "Path to a single mesh file or a folder to be accessed recursively. Default: /var/datasets/LAFAS-84Aligned/raw"
     ))
     
     parser.add_argument(
@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument(
         "-o", "--output-path",
         type=str,
-        help="Optional. If set, results will be saved to this path. If not set, the output will be saved inside the .obj file folder."
+        help="Optional. If set, results will be saved to this path. If not set, the output will be saved inside the mesh file folder."
     )
     
     parser.add_argument(

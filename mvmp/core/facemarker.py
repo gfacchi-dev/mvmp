@@ -88,16 +88,13 @@ class Facemarker:
         Detect facial landmarks on a mesh.
 
         Args:
-            mesh_path: Path to .obj mesh file
+            mesh_path: Path to 3D mesh file (supports .obj, .ply, .stl, .gltf, .glb, .off, etc.)
 
         Returns:
             FacemarkerResult with landmarks_3d, closest_vertices_ids, etc.
         """
         if not os.path.exists(mesh_path):
             raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
-
-        if not mesh_path.lower().endswith(".obj"):
-            raise ValueError("Only .obj mesh files are supported")
 
         meshes = import_mesh(mesh_path)
         meshes = meshes_setup(meshes, auto_align=True)

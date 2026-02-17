@@ -9,19 +9,13 @@ logger = logging.getLogger("mvmp")
 def import_mesh(filename):
     import os
 
-    # Change to mesh directory so Open3D can find texture files
-    original_cwd = os.getcwd()
+    # Convert to absolute path so Open3D can find texture files
+    abs_path = os.path.abspath(filename)
 
     try:
-        obj_dir = os.path.dirname(os.path.abspath(filename))
-        os.chdir(obj_dir)
-
-        basename = os.path.basename(filename)
-        textured_mesh = o3d.io.read_triangle_mesh(basename, enable_post_processing=True)
+        textured_mesh = o3d.io.read_triangle_mesh(abs_path, enable_post_processing=True)
     except Exception as e:
         raise RuntimeError(f"Error importing mesh: {e}")
-    finally:
-        os.chdir(original_cwd)
 
     if not textured_mesh.vertices:
         raise RuntimeError(f"Error loading mesh: no vertices found in {filename}")

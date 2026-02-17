@@ -6,6 +6,8 @@
 
 MVMP (Multi-View MediaPipe) is a lightweight tool for 3D facial landmark detection on static textured meshes. It renders multiple camera views of the mesh, detects 2D landmarks with MediaPipe, and backprojects them into 3D space through DBSCAN-based consensus triangulation. The result is 478 facial landmarks aligned with the 3D mesh geometry, with robust outlier rejection.
 
+**Supported mesh formats:** .obj, .ply, .stl, .gltf, .glb, .off
+
 <!--![alt text](./img/pipelineOverview.png)-->
 <img src="./img/pipelineOverview.png">
 
@@ -91,12 +93,12 @@ result = marker.predict("mesh.obj")
 ```bash
 mvmp path/to/mesh.obj -p 100 -o output/
 
-# Process all .obj files in a directory
+# Process all mesh files in a directory (supports .obj, .ply, .stl, .gltf, .glb, .off)
 mvmp meshes/ -p 200 -o results/
 ```
 
 **Arguments:**
-- `path`: Path to .obj file or directory
+- `path`: Path to mesh file or directory
 - `-p, --projections-number`: Number of projections (default: 500)
 - `-o, --output-path`: Output directory
 
