@@ -279,13 +279,9 @@ def __predict(meshes, projections_number, args=None, camera_angles=None, verbose
 
     # Find closest vertex for each landmark using KDTree (much faster than cdist)
     mesh_path = meshes["mesh_path"]
-    original_cwd = os_module.getcwd()
-    os_module.chdir(os_module.path.dirname(os_module.path.abspath(mesh_path)))
+    abs_mesh_path = os_module.path.abspath(mesh_path)
 
-    try:
-        actual_mesh = o3d.io.read_triangle_mesh(os_module.path.basename(mesh_path), enable_post_processing=True)
-    finally:
-        os_module.chdir(original_cwd)
+    actual_mesh = o3d.io.read_triangle_mesh(abs_mesh_path, enable_post_processing=True)
 
     scale = meshes["transform_scale"]
     center = meshes["transform_center"]
