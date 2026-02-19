@@ -54,36 +54,43 @@ def perspective_rays_directions(img_landmarks, size, intrinsic):
 
 
 def cluster_consensus(points, eps=0.01):
-    """Find largest cluster using DBSCAN, return its centroid.
-    
-    More robust than median for handling outliers from poor ray intersections.
-    
+    """Find largest cluster using DBSCAN, return its medoid.
+
+    The medoid is the cluster point closest to the centroid, so it is always
+    one of the original raycast hit points — which lie exactly on the mesh surface.
+    Unlike the centroid/mean, this never produces a floating point off the surface.
+
     Args:
         points: Array of 3D points
         eps: Maximum distance between points in a cluster (scaled to normalized mesh)
-    
+
     Returns:
-        Centroid of the largest cluster
+        Medoid of the largest cluster (an actual input point, on the mesh surface)
     """
     points = np.asarray(points)
-    
+
     if len(points) < 3:
-        return np.median(points, axis=0)
-    
+        # With very few points just pick the one closest to the median
+        median = np.median(points, axis=0)
+        return points[np.argmin(np.linalg.norm(points - median, axis=1))]
+
     db = DBSCAN(eps=eps, min_samples=2).fit(points)
     labels = db.labels_
-    
+
     # Find largest cluster (excluding noise points labeled -1)
     valid_labels = labels[labels >= 0]
     if len(valid_labels) == 0:
-        # No clusters found, fall back to median
-        return np.median(points, axis=0)
-    
+        # No clusters found: return the point closest to the overall mean
+        mean = np.mean(points, axis=0)
+        return points[np.argmin(np.linalg.norm(points - mean, axis=1))]
+
     unique, counts = np.unique(valid_labels, return_counts=True)
     largest_cluster = unique[np.argmax(counts)]
     cluster_points = points[labels == largest_cluster]
-    
-    return np.mean(cluster_points, axis=0)
+
+    # Medoid: cluster point closest to the cluster centroid
+    centroid = np.mean(cluster_points, axis=0)
+    return cluster_points[np.argmin(np.linalg.norm(cluster_points - centroid, axis=1))]
 
 
 def __predict(meshes, projections_number, args=None, camera_angles=None, verbose=True, debug_output_dir=None, camera_distance_multiplier=1.0):
