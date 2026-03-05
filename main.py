@@ -3,6 +3,8 @@ from mvmp.arg_parser import parse_args
 from mvmp.core.predict import *
 from mvmp.core.io_utils import import_mesh, meshes_setup
 import numpy as np
+
+
 if __name__ == "__main__":
     args = parse_args()
 
