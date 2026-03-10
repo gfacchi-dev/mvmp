@@ -115,7 +115,7 @@ JSON output contains coordinates at the original mesh scale:
 
 ### Results
 <!--![alt text](./img/results.png)-->
-<img src="results.png">
+<img src="pipelineOverview.png">
 
 ## Contributing
 
