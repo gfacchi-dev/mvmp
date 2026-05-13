@@ -1,6 +1,6 @@
 [project]
 name = "mvmp"
-version = "1.0.0"
+version = "1.1.0"
 description = "3D Multi-View MediaPipe - Facial landmark detection for 3D meshes"
 readme = "README.md"
 requires-python = ">=3.11"
