@@ -23,3 +23,6 @@ build/
 *.pyc
 .pytest_cache/
 .test-env/
+
+diag
+test*

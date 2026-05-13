@@ -33,9 +33,9 @@ def main():
 
     for file in to_process:
         meshes = import_mesh(file)
-        # Auto-align è abilitato di default, disabilitato con --no-auto-align se esiste
-        auto_align = not getattr(args, 'no_auto_align', False)
-        args.meshes = meshes_setup(meshes, auto_align=auto_align)
+        auto_orient = not getattr(args, 'no_auto_orient', False)
+        args.meshes = meshes_setup(meshes)
+        args.auto_orient = auto_orient
 
         landmarks_3d, closest_vertices_ids, camera_data, landmark_candidates = __predict(
             args.meshes, args.projections_number, args
@@ -45,17 +45,15 @@ def main():
             print(f"\nSkipping {file} due to detection failure.\n")
             continue
 
-        # Usa output_path se specificato, altrimenti crea directory output/
         if args.output_path:
             directory = args.output_path
         else:
             directory = os.path.join(os.getcwd(), "output")
             os.makedirs(directory, exist_ok=True)
 
-        file_name = os.path.splitext(os.path.basename(args.path))[0]
+        file_name = os.path.splitext(os.path.basename(file))[0]
         json_file = os.path.join(directory, f"{file_name}_landmarks.json")
 
-        # Ottieni i transform params
         transform_params = {
             "center": args.meshes["transform_center"].tolist(),
             "scale": float(args.meshes["transform_scale"])
@@ -63,12 +61,11 @@ def main():
 
         data = {
             "model": file_name,
-            "normalized_coordinates": landmarks_3d.tolist() if hasattr(landmarks_3d, 'tolist') else landmarks_3d,
-            "closest_vertex_indexes": closest_vertices_ids,
+            "coordinates": {str(k): v for k, v in landmarks_3d.items()},
+            "closest_vertex_indexes": {str(k): v for k, v in closest_vertices_ids.items()},
             "transform_params": transform_params
         }
 
-        # Aggiungi camera_data se disponibile
         if camera_data:
             data["cameras"] = [
                 pos.tolist() if hasattr(pos, 'tolist') else pos

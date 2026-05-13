@@ -4,8 +4,9 @@ def parse_args():
         description="Process a single mesh file or all mesh files in a folder or children folders. Supports .obj, .ply, .stl, .gltf, .glb, .off formats."
     )
 
-    parser.add_argument("path", nargs='?', default="/var/datasets/LAFAS-84Aligned/raw", help=(
-        "Path to a single mesh file or a folder to be accessed recursively. Default: /var/datasets/LAFAS-84Aligned/raw"
+    parser.add_argument("path", help=(
+        "Path to a single mesh file or a folder to be scanned recursively. "
+        "Supports .obj, .ply, .stl, .gltf, .glb, .off formats."
     ))
     
     parser.add_argument(
@@ -31,6 +32,12 @@ def parse_args():
         "-d", "--double",
         action="store_true",
         help="If --double is set the mesh will be processed twice, the first time to adjust its alignment to the world frame, the second to actually predict the landmarks."
+    )
+
+    parser.add_argument(
+        "--no-auto-orient",
+        action="store_true",
+        help="Disable Fibonacci-sphere auto-alignment phase (face will NOT be rotated to face +Z)."
     )
 
     return parser.parse_args()

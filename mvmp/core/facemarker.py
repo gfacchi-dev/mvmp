@@ -5,7 +5,6 @@ import os
 import json
 import logging
 import numpy as np
-import open3d as o3d
 
 from .predict import __predict as _predict_impl
 from .io_utils import import_mesh, meshes_setup
@@ -31,8 +30,8 @@ class FacemarkerResult:
     def to_dict(self):
         """Convert result to dictionary format."""
         data = {
-            "coordinates": self.landmarks_3d.tolist() if hasattr(self.landmarks_3d, 'tolist') else self.landmarks_3d,
-            "closest_vertex_indexes": self.closest_vertices_ids,
+            "coordinates": {str(k): v for k, v in self.landmarks_3d.items()},
+            "closest_vertex_indexes": {str(k): v for k, v in self.closest_vertices_ids.items()},
         }
 
         if self.camera_data:
@@ -52,40 +51,37 @@ class FacemarkerResult:
 
 class Facemarker:
     """
-    Detect facial landmarks on 3D meshes.
+    Detect facial landmarks on 3D meshes using zone-based multi-view projection.
+
+    Five anatomically-defined zone cameras cover the full face:
+    front, left quarter, right quarter, upper (forehead), lower (chin/jaw).
+    Each camera is responsible only for its assigned MediaPipe landmarks,
+    avoiding cross-zone confusion near occlusion boundaries.
 
     Example:
         >>> marker = Facemarker()
-        >>> result = marker.predict("path/to/mesh.obj", projections=100)
+        >>> result = marker.predict("path/to/mesh.obj")
         >>> result.save_json("landmarks.json")
         >>> print(result)
         FacemarkerResult(478 landmarks, 478 vertex indices)
-
-        # With custom camera angles
-        >>> marker = Facemarker(camera_angles=[(0, 0), (10, -5), (-15, 10)])
-        >>> result = marker.predict("path/to/mesh.obj")
     """
 
-    def __init__(self, projections=100, camera_angles=None, verbose=True, debug_output_dir=None, camera_distance_multiplier=1.0):
+    def __init__(self, verbose=True, debug_output_dir=None,
+                 camera_distance_multiplier=1.0, auto_orient=True):
         """
         Args:
-            projections: Number of random projections (default: 100).
-                         Ignored if camera_angles is provided.
-            camera_angles: Optional list of (yaw, pitch) tuples in degrees.
-                          Example: [(0, 0), (10, -5), (-15, 10)]
-                          Yaw = left/right rotation, Pitch = up/down rotation.
             verbose: Print progress messages (default: True)
-            debug_output_dir: Optional path to save debug renders (plain + landmarks)
-            camera_distance_multiplier: Multiplier for camera distance (default: 1.0, use <1.0 to get closer)
+            debug_output_dir: Optional path to save debug renders per zone
+            camera_distance_multiplier: Multiplier for camera distance (default: 1.0)
+            auto_orient: If True (default), run Fibonacci-sphere auto-alignment to face +Z
         """
-        self.projections = projections
-        self.camera_angles = camera_angles
         self.verbose = verbose
         self.debug_output_dir = debug_output_dir
         self.camera_distance_multiplier = camera_distance_multiplier
+        self.auto_orient = auto_orient
 
-        # Suppress Open3D warnings during mesh I/O
-        o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
+        # Suppress trimesh log spam
+        logging.getLogger("trimesh").setLevel(logging.WARNING)
 
     def predict(self, mesh_path):
         """
@@ -101,11 +97,13 @@ class Facemarker:
             raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
 
         meshes = import_mesh(mesh_path)
-        meshes = meshes_setup(meshes, auto_align=True)
+        meshes = meshes_setup(meshes)
 
         landmarks_3d, closest_vertices_ids, camera_data, landmark_candidates = _predict_impl(
-            meshes, self.projections, camera_angles=self.camera_angles, verbose=self.verbose,
-            debug_output_dir=self.debug_output_dir, camera_distance_multiplier=self.camera_distance_multiplier
+            meshes, verbose=self.verbose,
+            debug_output_dir=self.debug_output_dir,
+            camera_distance_multiplier=self.camera_distance_multiplier,
+            auto_orient=self.auto_orient,
         )
 
         if landmarks_3d is None or closest_vertices_ids is None:

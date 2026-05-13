@@ -1,5 +1,4 @@
 import numpy as np
-import open3d as o3d
 import mediapipe as mp
 from mediapipe.tasks.python import vision
 from pathlib import Path
@@ -21,7 +20,7 @@ def detectorInit(detection_confidence=.5):
             running_mode = vision.RunningMode.IMAGE,
 
             output_face_blendshapes = False,
-            output_facial_transformation_matrixes = False,
+            output_facial_transformation_matrixes = True,
         )
 
     return vision.FaceLandmarker.create_from_options(options)
