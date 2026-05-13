@@ -1,14 +1,14 @@
 """
 Core prediction module — pyrender (headless) + trimesh for rendering,
 raycasting, and mesh I/O.  MediaPipe provides 2D face landmarks;
-DBSCAN clustering + KDTree back-project them to 3D on the mesh surface.
+zone-based views back-project them to 3D on the mesh surface.
 """
 import os as os_module
 import logging
 import json
 import numpy as np
 import scipy
-from sklearn.cluster import DBSCAN
+
 
 from .mp_utils import *
 from .triangles import TRIANGLES
@@ -114,24 +114,7 @@ def _render_view(renderer, scene, cam_node, pose):
     return np.ascontiguousarray(color[:, :, :3])
 
 
-# ── Raycasting helpers ────────────────────────────────────────────────────
-_MP_FACES = np.asarray(TRIANGLES, dtype=np.int64)  # fixed MediaPipe topology
 
-
-def _hpr_face_normals(mp_points, eye=(0, 0, 1)):
-    """Visibility via face normals — O(faces) vs BVH rebuild per view.
-    Accurate enough because the MP face mesh has no deep concavities."""
-    mp_points = np.asarray(mp_points, dtype=np.float64)
-    eye = np.asarray(eye, dtype=np.float64)
-    v0 = mp_points[_MP_FACES[:, 0]]
-    v1 = mp_points[_MP_FACES[:, 1]]
-    v2 = mp_points[_MP_FACES[:, 2]]
-    normals = np.cross(v1 - v0, v2 - v0)
-    centroids = (v0 + v1 + v2) / 3.0
-    facing = np.einsum("ij,ij->i", normals, eye - centroids) > 0
-    visible = np.zeros(len(mp_points), dtype=bool)
-    visible[_MP_FACES[facing].ravel()] = True
-    return np.where(visible)[0]
 
 
 def _perspective_rays_directions(img_landmarks, size, intrinsic):
@@ -145,24 +128,7 @@ def _perspective_rays_directions(img_landmarks, size, intrinsic):
     return rays
 
 
-# ── DBSCAN clustering ─────────────────────────────────────────────────────
-def cluster_consensus(points, eps=0.01):
-    """Find largest DBSCAN cluster, return its medoid."""
-    points = np.asarray(points)
-    if len(points) < 3:
-        median = np.median(points, axis=0)
-        return points[np.argmin(np.linalg.norm(points - median, axis=1))]
-    db = DBSCAN(eps=eps, min_samples=2).fit(points)
-    labels = db.labels_
-    valid = labels[labels >= 0]
-    if len(valid) == 0:
-        mean = np.mean(points, axis=0)
-        return points[np.argmin(np.linalg.norm(points - mean, axis=1))]
-    unique, counts = np.unique(valid, return_counts=True)
-    largest = unique[np.argmax(counts)]
-    cluster = points[labels == largest]
-    centroid = np.mean(cluster, axis=0)
-    return cluster[np.argmin(np.linalg.norm(cluster - centroid, axis=1))]
+
 
 
 # ── Auto-align phase ──────────────────────────────────────────────────────
@@ -510,34 +476,25 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
                     f"landmarks_{zone_name}_yaw{yaw_deg:+06.1f}_pitch{pitch_deg:+06.1f}.png")
             )
 
-        # MediaPipe face mesh (for HPR)
         all_landmarks = detection_result.face_landmarks[0]
-        mp_pts = np.array([[p.x, -p.y, -p.z] for p in all_landmarks], dtype=np.float64)
-        visible = _hpr_face_normals(mp_pts, eye=(0, 0, 1))
-
         landmarks_2d = np.array([[p.x, p.y, 0] for p in all_landmarks], dtype=np.float64)
-        landmarks_2d = landmarks_2d[visible]
 
-        # Perspective rays
         persp_rays = _perspective_rays_directions(landmarks_2d, IMG_SIZE, intr_mat)
 
-        # World rays: rotate from camera space to world
         world_rays = (persp_rays * [1, -1, -1]) @ np.linalg.inv(cam_rotations[idx])
 
         camera_pos = cam_dirs[idx] * cam_dist
         camera_positions.append(camera_pos.copy())
 
-        for i, lm_idx in enumerate(visible):
-            # Zone filter: only accept landmarks assigned to this zone's camera
+        for lm_idx in range(478):
             if lm_idx not in zone_lm_set:
                 continue
-            # Background filter: skip landmarks whose pixel is white (background)
             lm = all_landmarks[lm_idx]
             px = max(0, min(int(lm.x * IMG_SIZE), IMG_SIZE - 1))
             py_img = max(0, min(int(lm.y * IMG_SIZE), IMG_SIZE - 1))
             if np.all(img[py_img, px] > 240):
                 continue
-            views[lm_idx].append(np.concatenate([camera_pos, world_rays[i]]).astype(np.float32))
+            views[lm_idx].append(np.concatenate([camera_pos, world_rays[lm_idx]]).astype(np.float32))
 
     del renderer
 
@@ -558,7 +515,6 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
 
     intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(tri_mesh)
 
-    # landmarks_3d_norm: mp_idx -> consensus point in normalized mesh space
     landmarks_3d_norm = {}
     for i, rays in views.items():
         if len(rays) == 0:
@@ -573,18 +529,10 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
             multiple_hits=False,
         )
 
-        all_hits = np.full(len(rays), np.inf)
         if len(index_ray) > 0:
-            all_hits[index_ray] = np.linalg.norm(locations - origins[index_ray], axis=1)
-
-        valid_mask = np.isfinite(all_hits)
-        valid_pts = origins[valid_mask] + directions[valid_mask] * all_hits[valid_mask, np.newaxis]
-
-        for pt in valid_pts:
+            pt = origins[index_ray[0]] + directions[index_ray[0]] * np.linalg.norm(locations[0] - origins[index_ray[0]])
             landmark_candidates[i].append(pt)
-
-        if len(valid_pts) > 0:
-            landmarks_3d_norm[i] = cluster_consensus(valid_pts, eps=0.01)
+            landmarks_3d_norm[i] = pt
 
     if len(landmarks_3d_norm) == 0:
         raise RuntimeError("No landmarks could be triangulated from raycasting.")

@@ -26,9 +26,9 @@ dependencies = [
     "pyrender>=0.1.45",
     "pyrr>=0.10.3",
     "pyglet<2",
-    "scikit-learn>=1.3.0",
     "scipy>=1.11.0",
     "trimesh>=4.0.0",
+    "embreex>=4.4.0",
 ]
 
 [project.urls]
