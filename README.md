@@ -4,11 +4,14 @@
 
 ## Description
 
-MVMP (Multi-View MediaPipe) is a lightweight tool for 3D facial landmark detection on static textured meshes. It renders multiple camera views of the mesh, detects 2D landmarks with MediaPipe, and backprojects them into 3D space through DBSCAN-based consensus triangulation. The result is 478 facial landmarks aligned with the 3D mesh geometry, with robust outlier rejection.
+MVMP detects 478 MediaPipe-compatible 3D facial landmarks on textured meshes. 
+It renders the mesh from 5 deterministic zone-based viewpoints (front, left/right sides, 
+upper/lower), detects 2D landmarks with MediaPipe, and back-projects each to the mesh 
+surface via raycasting. An optional Fibonacci-sphere auto-alignment phase orients the face 
+toward +Z before detection.
 
 **Supported mesh formats:** .obj, .ply, .stl, .gltf, .glb, .off
 
-<!--![alt text](./img/pipelineOverview.png)-->
 <img src="./img/pipelineOverview.png">
 
 ## Installation
@@ -34,88 +37,69 @@ pip install .
 ```python
 from mvmp import Facemarker
 
-# Create a detector
 marker = Facemarker()
-
-# Detect landmarks on a mesh
 result = marker.predict("path/to/mesh.obj")
 print(result)  # FacemarkerResult(478 landmarks, 478 vertex indices)
 
-# Access results
-landmarks_3d = result.landmarks_3d          # list of [x, y, z] coordinates (original scale)
-vertex_indices = result.closest_vertices_ids  # closest mesh vertex per landmark
+landmarks_3d = result.landmarks_3d              # dict[int, [x, y, z]]
+vertex_indices = result.closest_vertices_ids    # dict[int, int]
 
-# Save to JSON
 result.save_json("landmarks.json")
 ```
 
-#### More projections = more accuracy
-
-```python
-marker = Facemarker(projections=500)
-result = marker.predict("mesh.obj")
-```
-
-#### Custom camera angles
-
-Instead of random projections, specify exact (yaw, pitch) angles in degrees:
-
-```python
-marker = Facemarker(camera_angles=[
-    (0, 0),       # front view
-    (30, 0),      # 30 degrees right
-    (-30, 0),     # 30 degrees left
-    (0, -20),     # looking up
-    (0, 15),      # looking down
-])
-result = marker.predict("mesh.obj")
-```
-
-#### Process multiple meshes
-
-```python
-marker = Facemarker(projections=200)
-
-for mesh_path in mesh_files:
-    result = marker.predict(mesh_path)
-    result.save_json(f"output/{mesh_path.stem}.json")
-```
-
-#### Quiet mode
+#### Quiet mode / debug output
 
 ```python
 marker = Facemarker(verbose=False)
-result = marker.predict("mesh.obj")
+
+# Save per-zone renders and auto-align report
+marker = Facemarker(debug_output_dir="debug/")
+```
+
+#### Camera distance
+
+```python
+# Move cameras closer (0.5×) or farther (2×)
+marker = Facemarker(camera_distance_multiplier=0.8)
+```
+
+#### Disable auto-alignment
+
+```python
+# Skip Fibonacci-sphere alignment (mesh assumed to already face +Z)
+marker = Facemarker(auto_orient=False)
 ```
 
 ### Command Line
 
 ```bash
-mvmp path/to/mesh.obj -p 100 -o output/
+mvmp path/to/mesh.obj -o output/
 
-# Process all mesh files in a directory (supports .obj, .ply, .stl, .gltf, .glb, .off)
-mvmp meshes/ -p 200 -o results/
+# Process a folder
+mvmp meshes/ -o results/
+
+# With debug renders
+mvmp mesh.obj --debug debug_output/
+
+# Closer camera, no auto-align
+mvmp mesh.obj --camera-distance 0.8 --no-auto-orient
 ```
 
 **Arguments:**
-- `path`: Path to mesh file or directory
-- `-p, --projections-number`: Number of projections (default: 500)
-- `-o, --output-path`: Output directory
+- `path`: Mesh file or directory
+- `-o, --output-path`: Output directory (default: `./output/`)
+- `--debug`: Save debug renders and auto-align report to this directory
+- `--camera-distance`: Camera distance multiplier (default: 1.0)
+- `--no-auto-orient`: Skip Fibonacci-sphere auto-alignment
 
 ### Output Format
 
-JSON output contains coordinates at the original mesh scale:
-
 ```json
 {
-  "coordinates": [[x, y, z], ...],
-  "closest_vertex_indexes": [idx1, idx2, ...]
+  "coordinates": {"0": [x, y, z], ...},
+  "closest_vertex_indexes": {"0": 12345, ...}
 }
 ```
-
-### Results
-<!--![alt text](./img/results.png)-->
-<img src="pipelineOverview.png">
 
 ## Contributing
 

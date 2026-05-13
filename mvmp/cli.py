@@ -4,18 +4,14 @@ CLI entry point for MVMP (3D Multi-View MediaPipe)
 import os
 import sys
 import json
-import numpy as np
 
 from .arg_parser import parse_args
-from .core.predict import __predict
-from .core.io_utils import import_mesh, meshes_setup
+from .core.facemarker import Facemarker
 
 
 def main():
-    """Main CLI entry point"""
     args = parse_args()
 
-    # Supported mesh formats
     MESH_EXTENSIONS = ('.obj', '.ply', '.stl', '.gltf', '.glb', '.off')
 
     to_process = []
@@ -31,51 +27,26 @@ def main():
             sys.exit(1)
         to_process.append(args.path)
 
+    marker = Facemarker(
+        debug_output_dir=args.debug,
+        camera_distance_multiplier=args.camera_distance,
+        auto_orient=not args.no_auto_orient,
+    )
+
     for file in to_process:
-        meshes = import_mesh(file)
-        auto_orient = not getattr(args, 'no_auto_orient', False)
-        args.meshes = meshes_setup(meshes)
-        args.auto_orient = auto_orient
-
-        landmarks_3d, closest_vertices_ids, camera_data, landmark_candidates = __predict(
-            args.meshes, args.projections_number, args
-        )
-
-        if landmarks_3d is None or closest_vertices_ids is None:
-            print(f"\nSkipping {file} due to detection failure.\n")
+        print(f"Processing {file}...")
+        try:
+            result = marker.predict(file)
+        except Exception as e:
+            print(f"  Error: {e}")
             continue
 
-        if args.output_path:
-            directory = args.output_path
-        else:
-            directory = os.path.join(os.getcwd(), "output")
-            os.makedirs(directory, exist_ok=True)
-
-        file_name = os.path.splitext(os.path.basename(file))[0]
-        json_file = os.path.join(directory, f"{file_name}_landmarks.json")
-
-        transform_params = {
-            "center": args.meshes["transform_center"].tolist(),
-            "scale": float(args.meshes["transform_scale"])
-        }
-
-        data = {
-            "model": file_name,
-            "coordinates": {str(k): v for k, v in landmarks_3d.items()},
-            "closest_vertex_indexes": {str(k): v for k, v in closest_vertices_ids.items()},
-            "transform_params": transform_params
-        }
-
-        if camera_data:
-            data["cameras"] = [
-                pos.tolist() if hasattr(pos, 'tolist') else pos
-                for pos in camera_data
-            ]
-
-        with open(json_file, "w") as f:
-            json.dump(data, f, indent=4)
-
-        print(f"\n=== Landmarks saved in {json_file} ===")
+        out_dir = args.output_path or os.path.join(os.getcwd(), "output")
+        os.makedirs(out_dir, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(file))[0]
+        json_path = os.path.join(out_dir, f"{stem}_landmarks.json")
+        result.save_json(json_path)
+        print(f"  → {json_path}")
 
 
 if __name__ == "__main__":

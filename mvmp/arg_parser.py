@@ -1,43 +1,32 @@
 import argparse
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Process a single mesh file or all mesh files in a folder or children folders. Supports .obj, .ply, .stl, .gltf, .glb, .off formats."
+        description="Detect facial landmarks on 3D meshes using MediaPipe + zone-based multi-view projection. Supports .obj, .ply, .stl, .gltf, .glb, .off."
     )
 
     parser.add_argument("path", help=(
-        "Path to a single mesh file or a folder to be scanned recursively. "
-        "Supports .obj, .ply, .stl, .gltf, .glb, .off formats."
+        "Path to a single mesh file or a folder to be scanned recursively."
     ))
-    
-    parser.add_argument(
-        "-p", "--projections-number",
-        type=int,
-        default=500,
-        help="Number of projections to be calculated. Default is 500."
-    )
-    
     parser.add_argument(
         "-o", "--output-path",
         type=str,
-        help="Optional. If set, results will be saved to this path. If not set, the output will be saved inside the mesh file folder."
+        help="Optional output directory. Default: ./output/"
     )
-    
     parser.add_argument(
-        "-r", "--render",
-        action="store_true",
-        help="If --render is set the result will be rendered on an external window."
+        "--debug",
+        type=str,
+        default=None,
+        help="Save debug renders and auto-align report to this directory."
     )
-
     parser.add_argument(
-        "-d", "--double",
-        action="store_true",
-        help="If --double is set the mesh will be processed twice, the first time to adjust its alignment to the world frame, the second to actually predict the landmarks."
+        "--camera-distance",
+        type=float,
+        default=1.0,
+        help="Camera distance multiplier (default: 1.0)."
     )
-
     parser.add_argument(
         "--no-auto-orient",
         action="store_true",
-        help="Disable Fibonacci-sphere auto-alignment phase (face will NOT be rotated to face +Z)."
+        help="Disable Fibonacci-sphere auto-alignment."
     )
-
     return parser.parse_args()
