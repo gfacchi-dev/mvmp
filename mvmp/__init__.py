@@ -5,5 +5,5 @@ Facial landmark detection for 3D meshes
 
 from .core.facemarker import Facemarker, FacemarkerResult
 
-__version__ = "0.2.13"
+__version__ = "1.0.0"
 __all__ = ["Facemarker", "FacemarkerResult"]
