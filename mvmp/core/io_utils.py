@@ -100,10 +100,11 @@ def import_mesh(filename, allow_missing_texture=False):
         raise RuntimeError(f"No vertices found in {filename}")
 
     # ── Texture loaded? ──────────────────────────────────────────────────
-    has_texture = (
-        hasattr(mesh.visual, "material")
-        and mesh.visual.material is not None
-        and mesh.visual.material.image is not None
+    # SimpleMaterial exposes `.image`; PBRMaterial exposes `.baseColorTexture`
+    mat = getattr(mesh.visual, "material", None)
+    has_texture = mat is not None and (
+        getattr(mat, "image", None) is not None
+        or getattr(mat, "baseColorTexture", None) is not None
     )
     if not has_texture:
         msg = (
