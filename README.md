@@ -14,6 +14,17 @@ toward +Z before detection.
 
 <img src="./img/pipelineOverview.png">
 
+## System Requirements
+
+| Platform | OpenGL backend | Notes |
+|---|---|---|
+| Linux + GPU | EGL (auto-detected) | Works out of the box |
+| Linux headless (no GPU) | OSMesa | `apt install libosmesa6` (Ubuntu/Debian) · `dnf install mesa-libOSMesa` (Fedora/RHEL) |
+| macOS | CGL (system OpenGL) | OpenGL deprecated since macOS 10.14 but still functional |
+| Windows | WGL | Requires a GPU; pure CPU/headless not supported |
+
+**Python:** 3.11 – 3.12 fully supported. Python 3.13 may work but mediapipe wheels are not yet universally available for that version.
+
 ## Installation
 
 ```bash

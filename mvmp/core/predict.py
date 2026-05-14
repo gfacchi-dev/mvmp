@@ -77,15 +77,37 @@ class _Renderer:
 
     def __init__(self, img_size, cam_dist, fov_deg):
         self.img_size = img_size
+        import platform
+        system = platform.system()
         has_egl = bool(_ctypes_util.find_library("EGL"))
-        for backend in (['egl', 'osmesa'] if has_egl else ['osmesa', 'egl']):
-            try:
-                self._ctx = moderngl.create_context(standalone=True, backend=backend)
-                break
-            except Exception:
-                continue
+        if system == "Linux":
+            backends = ['egl', 'osmesa'] if has_egl else ['osmesa', 'egl']
         else:
-            self._ctx = moderngl.create_context(standalone=True)
+            backends = []  # macOS/Windows: let moderngl pick (CGL / WGL)
+
+        ctx = None
+        last_exc = None
+        for backend in backends:
+            try:
+                ctx = moderngl.create_context(standalone=True, backend=backend)
+                break
+            except Exception as exc:
+                last_exc = exc
+        if ctx is None:
+            try:
+                ctx = moderngl.create_context(standalone=True)
+            except Exception as exc:
+                last_exc = exc
+                _osmesa_hint = (
+                    "\nOn Linux without a GPU, install OSMesa: "
+                    "apt install libosmesa6  (Ubuntu/Debian) or "
+                    "dnf install mesa-libOSMesa  (Fedora/RHEL)"
+                ) if system == "Linux" else ""
+                raise RuntimeError(
+                    f"Could not create an OpenGL context for headless rendering "
+                    f"({last_exc}).{_osmesa_hint}"
+                ) from exc
+        self._ctx = ctx
 
         self._ctx.enable(moderngl.DEPTH_TEST)
         self._ctx.enable(moderngl.CULL_FACE)
