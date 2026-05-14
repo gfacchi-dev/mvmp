@@ -46,6 +46,38 @@ def _fibonacci_sphere(n):
     return np.column_stack([r * np.cos(theta), y, r * np.sin(theta)])
 
 
+def _fibonacci_neighbors(directions, k=6):
+    dirs = np.asarray(directions)
+    dots = dirs @ dirs.T
+    neighbors = []
+    for i in range(len(dirs)):
+        order = np.argsort(-dots[i])
+        neighbors.append(order[1:k+1].tolist())
+    return neighbors
+
+
+def _face_dir_world(cam_dir, face_dir_cam):
+    d = np.asarray(cam_dir, dtype=float)
+    d /= np.linalg.norm(d)
+    forward_world = -d
+    up_ref = np.array([0.0, 1.0, 0.0])
+    if abs(np.dot(d, up_ref)) > 0.95:
+        up_ref = np.array([1.0, 0.0, 0.0])
+    up_world = up_ref - np.dot(up_ref, d) * d
+    up_world /= np.linalg.norm(up_world)
+    right_world = np.cross(up_world, forward_world)
+    right_world /= np.linalg.norm(right_world)
+    up_world = np.cross(forward_world, right_world)
+    R = np.column_stack([right_world, up_world, forward_world])
+    face_dir_cam = np.asarray(face_dir_cam, dtype=float)
+    n = np.linalg.norm(face_dir_cam)
+    if n > 1e-10:
+        face_dir_cam = face_dir_cam / n
+    fd_world = R @ face_dir_cam
+    fd_world /= np.linalg.norm(fd_world)
+    return fd_world
+
+
 def _extract_face_pose(face_matrix):
     M = np.asarray(face_matrix, dtype=np.float64)
     R = M[:3, :3].copy()
@@ -133,9 +165,13 @@ def _perspective_rays_directions(img_landmarks, size, intrinsic):
 
 # ── Auto-align phase ──────────────────────────────────────────────────────
 def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
-                       n_fibonacci=55, verbose=True, debug_output_dir=None):
+                       n_fibonacci=100, verbose=True, debug_output_dir=None,
+                       min_neighbor_support=3, max_score_isolation=3.0,
+                       max_direction_deviation=30.0, min_direction_support=2):
     fibonacci_dirs = _fibonacci_sphere(n_fibonacci)
+    neighbors = _fibonacci_neighbors(fibonacci_dirs, k=6)
     probe_results = []
+    detection_by_fib = [None] * n_fibonacci
     weighted_sum = np.zeros(3)
     total_weight = 0.0
 
@@ -186,9 +222,10 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
         if score < 1e-6:
             continue
 
+        detection_by_fib[idx] = len(probe_results)
         probe_results.append({
             "dir": d.tolist(), "yaw": yaw_d, "pitch": pitch_d, "roll": roll_d,
-            "score": score,
+            "score": score, "fib_idx": idx,
             "face_dir_cam": face_dir_cam.tolist() if isinstance(face_dir_cam, np.ndarray) else face_dir_cam,
         })
         weighted_sum += d * score
@@ -204,11 +241,67 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
             print("  NO FACE DETECTED in any Fibonacci probe — skipping auto-align.")
         return None, None, probe_results
 
-    # Use the SINGLE best probe direction (highest frontal score).
-    # While this doesn't give a perfect frontal pose, weight-averaging
-    # is worse (biased by side views).  Post-alignment projection views
-    # cover the face well in practice.
-    best_probe = max(probe_results, key=lambda r: r["score"])
+    # ── Neighbour-support filter ────────────────────────────────────────
+    for r in probe_results:
+        fib_idx = r["fib_idx"]
+        r["neighbor_support"] = sum(
+            1 for j in neighbors[fib_idx] if detection_by_fib[j] is not None
+        )
+
+    raw_sorted = sorted(probe_results, key=lambda r: r["score"], reverse=True)
+    validated = [r for r in raw_sorted if r["neighbor_support"] >= min_neighbor_support]
+
+    if not validated:
+        if verbose:
+            print(f"  WARNING: no probe passed neighbour-support filter "
+                  f"(min={min_neighbor_support}), falling back to raw best.")
+        validated = raw_sorted[:1]
+
+    def _neighbor_scores(pr):
+        fib_idx = pr["fib_idx"]
+        scores = []
+        for j in neighbors[fib_idx]:
+            if detection_by_fib[j] is not None:
+                scores.append(probe_results[detection_by_fib[j]]["score"])
+        return scores
+
+    def _select_best(candidates):
+        for c in candidates:
+            n_scores = _neighbor_scores(c)
+            if len(n_scores) < 2:
+                return c
+            median_s = float(np.median(n_scores))
+            if median_s < 1e-9:
+                return c
+            ratio = c["score"] / median_s
+            if ratio > max_score_isolation:
+                if verbose:
+                    print(f"  Rejecting fib_idx={c['fib_idx']:3d} (score {c['score']:.4f}, "
+                          f"isolation ratio {ratio:.2f} > {max_score_isolation})")
+                continue
+            best_fd = _face_dir_world(c["dir"], c["face_dir_cam"])
+            agree = 0
+            n_neighbors = 0
+            for j in neighbors[c["fib_idx"]]:
+                if detection_by_fib[j] is not None:
+                    n_neighbors += 1
+                    nb = probe_results[detection_by_fib[j]]
+                    nb_fd = _face_dir_world(nb["dir"], nb["face_dir_cam"])
+                    dot = np.clip(np.dot(best_fd, nb_fd), -1.0, 1.0)
+                    ang = float(np.degrees(np.arccos(abs(dot))))
+                    if ang < max_direction_deviation:
+                        agree += 1
+            if agree < min_direction_support:
+                if verbose:
+                    print(f"  Rejecting fib_idx={c['fib_idx']:3d} (score {c['score']:.4f}, "
+                          f"direction agreement {agree}/{n_neighbors} < {min_direction_support})")
+                continue
+            return c
+        if verbose:
+            print("  WARNING: no candidate passed all filters, falling back to raw best.")
+        return candidates[0]
+
+    best_probe = _select_best(validated)
     face_dir_best = np.asarray(best_probe["dir"], dtype=float)
     face_dir_best /= np.linalg.norm(face_dir_best)
 
@@ -370,7 +463,10 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
 
 # ── Main prediction ───────────────────────────────────────────────────────
 def __predict(meshes, verbose=True, debug_output_dir=None,
-              camera_distance_multiplier=1.0, auto_orient=True):
+              camera_distance_multiplier=1.0, auto_orient=True,
+              n_fibonacci=100, min_neighbor_support=3,
+              max_score_isolation=3.0, max_direction_deviation=30.0,
+              min_direction_support=2):
     mesh_path = meshes["mesh_path"]
     tri_mesh = meshes["trimesh"]
 
@@ -394,7 +490,12 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
     if auto_orient:
         R_align, face_dir_avg, probe_results = _auto_align_phase(
             renderer, scene, camera, detector, cam_dist, tri_mesh,
-            n_fibonacci=55, verbose=verbose, debug_output_dir=debug_output_dir
+            n_fibonacci=n_fibonacci, verbose=verbose,
+            debug_output_dir=debug_output_dir,
+            min_neighbor_support=min_neighbor_support,
+            max_score_isolation=max_score_isolation,
+            max_direction_deviation=max_direction_deviation,
+            min_direction_support=min_direction_support,
         )
         if R_align is not None:
             meshes["orientation_R"] = R_align

@@ -67,18 +67,33 @@ class Facemarker:
     """
 
     def __init__(self, verbose=True, debug_output_dir=None,
-                 camera_distance_multiplier=1.0, auto_orient=True):
+                 camera_distance_multiplier=1.0, auto_orient=True,
+                 n_fibonacci=100, min_neighbor_support=3,
+                 max_score_isolation=3.0, max_direction_deviation=30.0,
+                 min_direction_support=2, allow_missing_texture=False):
         """
         Args:
             verbose: Print progress messages (default: True)
             debug_output_dir: Optional path to save debug renders per zone
             camera_distance_multiplier: Multiplier for camera distance (default: 1.0)
             auto_orient: If True (default), run Fibonacci-sphere auto-alignment to face +Z
+            n_fibonacci: Number of Fibonacci probes for auto-alignment (default: 100)
+            min_neighbor_support: Min neighbouring probes that must detect a face (default: 3)
+            max_score_isolation: Max score ratio vs neighbour median (default: 3.0)
+            max_direction_deviation: Max degrees between face direction and consensus (default: 30.0)
+            min_direction_support: Min top-N probes agreeing on face direction (default: 2)
+            allow_missing_texture: If True only warn instead of raising on missing textures (default: False)
         """
         self.verbose = verbose
         self.debug_output_dir = debug_output_dir
         self.camera_distance_multiplier = camera_distance_multiplier
         self.auto_orient = auto_orient
+        self.n_fibonacci = n_fibonacci
+        self.min_neighbor_support = min_neighbor_support
+        self.max_score_isolation = max_score_isolation
+        self.max_direction_deviation = max_direction_deviation
+        self.min_direction_support = min_direction_support
+        self.allow_missing_texture = allow_missing_texture
 
         # Suppress trimesh log spam
         logging.getLogger("trimesh").setLevel(logging.WARNING)
@@ -96,7 +111,8 @@ class Facemarker:
         if not os.path.exists(mesh_path):
             raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
 
-        meshes = import_mesh(mesh_path)
+        meshes = import_mesh(mesh_path,
+                             allow_missing_texture=self.allow_missing_texture)
         meshes = meshes_setup(meshes)
 
         landmarks_3d, closest_vertices_ids, camera_data, landmark_candidates = _predict_impl(
@@ -104,6 +120,11 @@ class Facemarker:
             debug_output_dir=self.debug_output_dir,
             camera_distance_multiplier=self.camera_distance_multiplier,
             auto_orient=self.auto_orient,
+            n_fibonacci=self.n_fibonacci,
+            min_neighbor_support=self.min_neighbor_support,
+            max_score_isolation=self.max_score_isolation,
+            max_direction_deviation=self.max_direction_deviation,
+            min_direction_support=self.min_direction_support,
         )
 
         if landmarks_3d is None or closest_vertices_ids is None:

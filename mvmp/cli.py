@@ -31,6 +31,12 @@ def main():
         debug_output_dir=args.debug,
         camera_distance_multiplier=args.camera_distance,
         auto_orient=not args.no_auto_orient,
+        n_fibonacci=args.n_fibonacci,
+        min_neighbor_support=args.min_neighbor_support,
+        max_score_isolation=args.max_score_isolation,
+        max_direction_deviation=args.max_direction_deviation,
+        min_direction_support=args.min_direction_support,
+        allow_missing_texture=args.allow_missing_texture,
     )
 
     for file in to_process:

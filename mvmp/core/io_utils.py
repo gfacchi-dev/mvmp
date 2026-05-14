@@ -69,8 +69,15 @@ def _check_obj_textures(obj_path):
     return warnings
 
 
-def import_mesh(filename):
-    """Load a mesh via trimesh (supports OBJ, PLY, STL, GLTF, etc. with textures)."""
+def import_mesh(filename, allow_missing_texture=False):
+    """Load a mesh via trimesh (supports OBJ, PLY, STL, GLTF, etc. with textures).
+
+    Args:
+        filename: Path to the mesh file.
+        allow_missing_texture: If False (default), raise RuntimeError when the
+            mesh has a material referencing a texture but no image was loaded.
+            If True, only log a warning and continue.
+    """
     abs_path = os.path.abspath(filename)
 
     if abs_path.lower().endswith(".obj"):
@@ -91,6 +98,22 @@ def import_mesh(filename):
 
     if len(mesh.vertices) == 0:
         raise RuntimeError(f"No vertices found in {filename}")
+
+    # ── Texture loaded? ──────────────────────────────────────────────────
+    has_texture = (
+        hasattr(mesh.visual, "material")
+        and mesh.visual.material is not None
+        and mesh.visual.material.image is not None
+    )
+    if not has_texture:
+        msg = (
+            f"Mesh loaded but texture image is missing — "
+            f"MediaPipe needs textured renders ({filename})"
+        )
+        if allow_missing_texture:
+            logger.warning(msg)
+        else:
+            raise RuntimeError(msg)
 
     return {
         "mesh_path": filename,
