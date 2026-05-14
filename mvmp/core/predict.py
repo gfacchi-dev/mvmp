@@ -1,48 +1,182 @@
 """
-Core prediction module — pyrender (headless) + trimesh for rendering,
+Core prediction module — moderngl (headless EGL/OSMesa) + trimesh for rendering,
 raycasting, and mesh I/O.  MediaPipe provides 2D face landmarks;
 zone-based views back-project them to 3D on the mesh surface.
 """
 import os as os_module
+import ctypes.util as _ctypes_util
 import logging
 import json
 import numpy as np
 import scipy
-
+import moderngl
 
 from .mp_utils import *
-from .triangles import TRIANGLES
 
 IMG_SIZE = 720
 FOV_DEG = 50.0
 logger = logging.getLogger("mvmp")
 
-# ── pyrender / headless setup ─────────────────────────────────────────────
-# Prefer EGL (GPU-accelerated headless); fall back to OSMesa (CPU software
-# renderer) when libEGL is absent, e.g. on bare CI runners.
-if not os_module.environ.get("PYOPENGL_PLATFORM"):
-    import ctypes, ctypes.util
-    _egl = ctypes.util.find_library("EGL")
-    os_module.environ["PYOPENGL_PLATFORM"] = "egl" if _egl else "osmesa"
-    del ctypes, _egl
-import pyglet
-pyglet.options["shadow_window"] = False
-import pyrender
-import pyrr
 import trimesh
 
+# ── GLSL shaders ──────────────────────────────────────────────────────────
+_VERT = """
+#version 330 core
+in vec3 in_position;
+in vec2 in_texcoord;
+uniform mat4 mvp;
+out vec2 v_texcoord;
+void main() {
+    gl_Position = mvp * vec4(in_position, 1.0);
+    v_texcoord = in_texcoord;
+}
+"""
 
-def _camera_pose(eye, target=(0, 0, 0), up=(0, 1, 0)):
-    """Return a pyrender camera pose (4×4) from eye → target."""
-    M = pyrr.Matrix44.look_at(
-        eye=np.asarray(eye, dtype=float),
-        target=np.asarray(target, dtype=float),
-        up=np.asarray(up, dtype=float),
-    )
-    return np.linalg.inv(np.asarray(M.T, dtype=np.float64))
+_FRAG = """
+#version 330 core
+uniform sampler2D texture0;
+in vec2 v_texcoord;
+out vec4 f_color;
+void main() {
+    f_color = texture(texture0, v_texcoord);
+}
+"""
 
 
-# ── Fibonacci helpers (unchanged) ─────────────────────────────────────────
+# ── Math helpers ──────────────────────────────────────────────────────────
+def _look_at(eye, target=(0.0, 0.0, 0.0), up=(0.0, 1.0, 0.0)):
+    """Return 4×4 view matrix (world→camera, column-vector convention)."""
+    e = np.asarray(eye,    dtype=np.float32)
+    t = np.asarray(target, dtype=np.float32)
+    u = np.asarray(up,     dtype=np.float32)
+    f = e - t;  f /= np.linalg.norm(f)          # +Z axis (camera looks down −Z)
+    r = np.cross(u, f); r /= np.linalg.norm(r)  # +X axis
+    u = np.cross(f, r)                           # corrected +Y axis
+    return np.array([
+        [r[0], r[1], r[2], -float(np.dot(r, e))],
+        [u[0], u[1], u[2], -float(np.dot(u, e))],
+        [f[0], f[1], f[2], -float(np.dot(f, e))],
+        [0.0,  0.0,  0.0,  1.0],
+    ], dtype=np.float32)
+
+
+def _projection(fov_deg, aspect, near, far):
+    """OpenGL perspective projection matrix (column-vector, row-major numpy)."""
+    f = 1.0 / np.tan(np.radians(fov_deg) / 2.0)
+    return np.array([
+        [f / aspect, 0.0, 0.0,                        0.0                    ],
+        [0.0,        f,   0.0,                        0.0                    ],
+        [0.0,        0.0, (far + near) / (near - far), 2*far*near/(near - far)],
+        [0.0,        0.0, -1.0,                       0.0                    ],
+    ], dtype=np.float32)
+
+
+# ── Renderer ──────────────────────────────────────────────────────────────
+class _Renderer:
+    """Headless OpenGL renderer (moderngl, EGL or OSMesa)."""
+
+    def __init__(self, img_size, cam_dist, fov_deg):
+        self.img_size = img_size
+        has_egl = bool(_ctypes_util.find_library("EGL"))
+        for backend in (['egl', 'osmesa'] if has_egl else ['osmesa', 'egl']):
+            try:
+                self._ctx = moderngl.create_context(standalone=True, backend=backend)
+                break
+            except Exception:
+                continue
+        else:
+            self._ctx = moderngl.create_context(standalone=True)
+
+        self._ctx.enable(moderngl.DEPTH_TEST)
+        self._ctx.enable(moderngl.CULL_FACE)
+
+        self._tex = self._ctx.texture((img_size, img_size), 4)
+        self._fbo = self._ctx.framebuffer(
+            color_attachments=[self._tex],
+            depth_attachment=self._ctx.depth_texture((img_size, img_size)),
+        )
+        self._prog = self._ctx.program(vertex_shader=_VERT, fragment_shader=_FRAG)
+
+        near = cam_dist * 0.01
+        far  = cam_dist * 10.0
+        self._proj = _projection(fov_deg, 1.0, near, far)
+
+        self._vao  = None
+        self._vbo  = None
+        self._gl_tex = None
+
+    def upload_mesh(self, mesh):
+        """Upload (or re-upload after rotation) trimesh geometry to the GPU."""
+        if self._vao is not None:
+            self._vao.release()
+        if self._vbo is not None:
+            self._vbo.release()
+
+        # Expand by faces (no index buffer, matching pyrender smooth=False)
+        verts = mesh.vertices[mesh.faces].reshape(-1, 3).astype(np.float32)
+        has_uv = (hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None
+                  and len(mesh.visual.uv) == len(mesh.vertices))
+        if has_uv:
+            uvs = mesh.visual.uv[mesh.faces].reshape(-1, 2).astype(np.float32)
+        else:
+            uvs = np.zeros((len(verts), 2), dtype=np.float32)
+
+        vertex_data = np.hstack([verts, uvs]).astype(np.float32)
+        self._vbo = self._ctx.buffer(vertex_data.tobytes())
+        self._vao = self._ctx.vertex_array(
+            self._prog,
+            [(self._vbo, '3f 2f', 'in_position', 'in_texcoord')],
+        )
+
+        # Texture — upload once; re-uploading on mesh rotation is not needed
+        if self._gl_tex is None:
+            mat = getattr(mesh.visual, 'material', None)
+            img_pil = None
+            if mat is not None:
+                img_pil = getattr(mat, 'image', None) or getattr(mat, 'baseColorTexture', None)
+            if img_pil is not None:
+                img_arr = np.flipud(np.array(img_pil.convert('RGBA')))
+                h, w = img_arr.shape[:2]
+                self._gl_tex = self._ctx.texture((w, h), 4, img_arr.tobytes())
+                self._gl_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            else:
+                self._gl_tex = self._ctx.texture((1, 1), 4, b'\xff\xff\xff\xff')
+
+    def render(self, eye, target=(0.0, 0.0, 0.0), up=(0.0, 1.0, 0.0)):
+        """Render from a camera position; return RGB uint8 array (H, W, 3)."""
+        view = _look_at(eye, target, up)
+        mvp  = (self._proj @ view).astype(np.float32)
+
+        self._fbo.use()
+        self._ctx.viewport = (0, 0, self.img_size, self.img_size)
+        self._ctx.clear(1.0, 1.0, 1.0, 1.0)
+
+        self._prog['mvp'].write(mvp.T.tobytes())   # column-major for GLSL
+        self._gl_tex.use(0)
+        self._prog['texture0'] = 0
+        self._vao.render(moderngl.TRIANGLES)
+
+        # fbo.read() is unreliable with RGBA attachments; read via texture object
+        raw = np.frombuffer(self._tex.read(), dtype=np.uint8).reshape(
+            self.img_size, self.img_size, 4)
+        return np.ascontiguousarray(np.flipud(raw[:, :, :3]))
+
+    def release(self):
+        try:
+            if self._vao:      self._vao.release()
+            if self._vbo:      self._vbo.release()
+            if self._gl_tex:   self._gl_tex.release()
+            if self._tex:      self._tex.release()
+            if self._fbo:      self._fbo.release()
+            if self._ctx:      self._ctx.release()
+        except Exception:
+            pass
+
+    def __del__(self):
+        self.release()
+
+
+# ── Fibonacci helpers ─────────────────────────────────────────────────────
 def _fibonacci_sphere(n):
     phi = np.pi * (3.0 - np.sqrt(5.0))
     i = np.arange(n)
@@ -111,7 +245,6 @@ def _rotation_align(a, b):
     if nv < 1e-10:
         if c > 0:
             return np.eye(3)
-        # anti-parallel: rotate 180° around any axis perpendicular to a
         perp = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
         perp -= np.dot(perp, a) * a
         perp /= np.linalg.norm(perp)
@@ -121,56 +254,8 @@ def _rotation_align(a, b):
     return np.eye(3) + vx + vx @ vx * ((1.0 - c) / nv ** 2)
 
 
-# ── Mesh loading helpers ──────────────────────────────────────────────────
-def _load_trimesh(mesh_path):
-    """Load a mesh file via trimesh (handles BMP, JPG, PNG textures)."""
-    m = trimesh.load(mesh_path, force="mesh")
-    if not isinstance(m, trimesh.Trimesh):
-        raise RuntimeError(f"trimesh could not load {mesh_path} as a single mesh")
-    return m
-
-
-# ── Rendering helpers ─────────────────────────────────────────────────────
-def _prepare_renderer(mesh, cam_dist):
-    """Create a pyrender scene + OffscreenRenderer for a trimesh."""
-    py_mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
-    scene = pyrender.Scene()
-    scene.add(py_mesh)
-    camera = pyrender.PerspectiveCamera(
-        yfov=np.radians(FOV_DEG), aspectRatio=1.0,
-        znear=cam_dist * 0.01, zfar=cam_dist * 10,
-    )
-    cam_node = scene.add(camera)
-    renderer = pyrender.OffscreenRenderer(IMG_SIZE, IMG_SIZE)
-    return renderer, scene, cam_node
-
-
-def _render_view(renderer, scene, cam_node, pose):
-    """Render the scene with the given camera pose; return RGB uint8 image."""
-    scene.set_pose(cam_node, pose)
-    color, _ = renderer.render(scene, flags=pyrender.constants.RenderFlags.FLAT)
-    return np.ascontiguousarray(color[:, :, :3])
-
-
-
-
-
-def _perspective_rays_directions(img_landmarks, size, intrinsic):
-    """Vectorized perspective ray directions."""
-    la = np.asarray(img_landmarks, dtype=np.float64)
-    scaled = la * size
-    h = np.hstack([scaled[:, :2], np.ones((len(scaled), 1))])
-    inv_K = np.linalg.inv(intrinsic)
-    rays = h @ inv_K.T
-    rays /= np.linalg.norm(rays, axis=1, keepdims=True)
-    return rays
-
-
-
-
-
 # ── Auto-align phase ──────────────────────────────────────────────────────
-def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
+def _auto_align_phase(renderer, detector, cam_dist, tri_mesh,
                        n_fibonacci=100, verbose=True, debug_output_dir=None,
                        min_neighbor_support=3, max_score_isolation=3.0,
                        max_direction_deviation=30.0, min_direction_support=2):
@@ -198,8 +283,7 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
         up = up_ref - np.dot(up_ref, d) * d
         up /= np.linalg.norm(up)
 
-        pose = _camera_pose(eye, target=(0, 0, 0), up=up)
-        img = _render_view(renderer, scene, camera, pose)
+        img = renderer.render(eye, target=(0.0, 0.0, 0.0), up=up)
         detection_result = detector.detect(mpImage(img))
 
         if not detection_result.face_landmarks:
@@ -336,24 +420,14 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
         with open(os_module.path.join(debug_output_dir, "auto_align_report.json"), "w") as f:
             json.dump(report, f, indent=2)
 
-    # Also save the best probe's render image if a debug dir was given
-    if debug_output_dir:
-        os_module.makedirs(debug_output_dir, exist_ok=True)
-        best_dir = np.asarray(best_probe["dir"])
-
     # ── Bisection refinement ───────────────────────────────────────────
-    # Refine the face direction by bisecting yaw and pitch to drive
-    # the face's detected yaw/pitch toward zero.
     from scipy.spatial.transform import Rotation as Rot
 
-    # Convert best camera direction → initial yaw/pitch
     d0 = face_dir_best.copy()
-    yaw0 = np.arctan2(d0[0], np.sqrt(d0[1]**2 + d0[2]**2))
+    yaw0   = np.arctan2(d0[0], np.sqrt(d0[1]**2 + d0[2]**2))
     pitch0 = np.arctan2(d0[1], d0[2])
 
     def _score_at(yaw_rad, pitch_rad, roll_rad=0.0):
-        """Render from (yaw, pitch, roll) and return frontal score.
-        Roll rotates the camera's up vector around the view direction."""
         Ry = Rot.from_euler("Y", yaw_rad).as_matrix()
         Rx = Rot.from_euler("X", -pitch_rad).as_matrix()
         R_view = Rx @ Ry
@@ -362,26 +436,22 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
         view_dir = R_view @ np.array([0, 0, 1])
         R_roll = Rot.from_rotvec(view_dir * roll_rad).as_matrix()
         up_vec = R_roll @ up_base
-        pose = _camera_pose(eye, up=up_vec)
-        img = _render_view(renderer, scene, camera, pose)
+        img = renderer.render(eye, up=up_vec)
         result = detector.detect(mpImage(img))
         if not result.face_landmarks:
             return -1.0
         if (result.facial_transformation_matrixes and
                 len(result.facial_transformation_matrixes) > 0):
-            y, p, r, fdc = _extract_face_pose(
+            y, p, r, _ = _extract_face_pose(
                 np.asarray(result.facial_transformation_matrixes[0]))
             return _frontal_score(y, p, r)
         return 0.0
 
-    # Nelder-Mead simplex optimisation over (yaw, pitch, roll)
-    # to maximise frontal score (= minimise negative score)
     from scipy.optimize import minimize
 
     def _loss(params):
         y, p, r = params
         s = _score_at(y, p, r)
-        # Small penalty for large roll (keep face upright)
         return -s + 0.001 * abs(r)
 
     x0 = np.array([yaw0, pitch0, 0.0])
@@ -398,7 +468,6 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
     cur_yaw, cur_pitch, cur_roll = res.x
     final_score = -res.fun
 
-    # Convert refined yaw/pitch/roll → camera direction and alignment rotation
     Ry_ref = Rot.from_euler("Y", cur_yaw).as_matrix()
     Rx_ref = Rot.from_euler("X", -cur_pitch).as_matrix()
     R_view = Rx_ref @ Ry_ref
@@ -416,7 +485,6 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
         print(f"  Refined face direction: ({face_dir_refined[0]:+.4f}, "
               f"{face_dir_refined[1]:+.4f}, {face_dir_refined[2]:+.4f})")
 
-    # Save refinement debug renders
     if debug_output_dir:
         from PIL import Image as PILImage
         for label, y, p, r in [("probe_best", yaw0, pitch0, 0.0),
@@ -428,33 +496,25 @@ def _auto_align_phase(renderer, scene, camera, detector, cam_dist, tri_mesh,
             up_base = Rv @ np.array([0, 1, 0])
             vd = Rv @ np.array([0, 0, 1])
             Rr = Rot.from_rotvec(vd * r).as_matrix()
-            pose = _camera_pose(eye, up=Rr @ up_base)
-            img = _render_view(renderer, scene, camera, pose)
+            img = renderer.render(eye, up=Rr @ up_base)
             PILImage.fromarray(img).save(
                 os_module.path.join(debug_output_dir, f"{label}.png"))
 
-    # ── Two-step alignment: forward direction first, then roll ────────────
-    # Step 1: apply R_face so the face now looks straight at +Z
+    # ── Two-step alignment ─────────────────────────────────────────────
     tri_mesh.vertices = (R_face @ tri_mesh.vertices.T).T
-    scene.remove_node(list(scene.mesh_nodes)[0])
-    scene.add(pyrender.Mesh.from_trimesh(tri_mesh, smooth=False))
+    renderer.upload_mesh(tri_mesh)
 
-    # Step 2: measure the residual roll directly from the front camera.
-    # cur_roll was detected from the refined (off-axis) camera, so it can
-    # diverge from the true front-view roll when pitch is large (HEADSPACE).
-    front_pose = _camera_pose(np.array([0., 0., cam_dist]),
-                              target=(0., 0., 0.), up=(0., 1., 0.))
-    img_front = _render_view(renderer, scene, camera, front_pose)
+    front_eye = np.array([0., 0., cam_dist])
+    img_front = renderer.render(front_eye)
     result_front = detector.detect(mpImage(img_front))
 
-    roll_front_deg = float(np.degrees(cur_roll))  # fallback
+    roll_front_deg = float(np.degrees(cur_roll))
     if (result_front.face_landmarks and
             result_front.facial_transformation_matrixes and
             len(result_front.facial_transformation_matrixes) > 0):
         _, _, roll_front_deg, _ = _extract_face_pose(
             np.asarray(result_front.facial_transformation_matrixes[0]))
 
-    # Step 3: apply roll correction around world +Z
     R_roll = Rot.from_rotvec(np.array([0., 0., 1.]) * np.radians(-roll_front_deg)).as_matrix()
     R_align = R_roll @ R_face
     tri_mesh.vertices = (R_roll @ tri_mesh.vertices.T).T
@@ -473,29 +533,27 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
               n_fibonacci=100, min_neighbor_support=3,
               max_score_isolation=3.0, max_direction_deviation=30.0,
               min_direction_support=2):
-    mesh_path = meshes["mesh_path"]
     tri_mesh = meshes["trimesh"]
 
     meshes["orientation_R"] = None
 
     detector = detectorInit()
 
-    # ── Renderer setup ──────────────────────────────────────────────────
     cam_dist = 2.0 * camera_distance_multiplier
-    renderer, scene, camera = _prepare_renderer(tri_mesh, cam_dist)
+    renderer = _Renderer(IMG_SIZE, cam_dist, FOV_DEG)
+    renderer.upload_mesh(tri_mesh)
 
-    # Camera intrinsic matrix (same as Open3D version)
-    fov_rad = np.radians(FOV_DEG)
-    f = (IMG_SIZE / 2) / np.tan(fov_rad / 2)
+    # Camera intrinsic matrix (kept for raycasting — unchanged)
+    fov_rad  = np.radians(FOV_DEG)
+    f        = (IMG_SIZE / 2) / np.tan(fov_rad / 2)
     intr_mat = np.array([[f, 0, IMG_SIZE / 2],
                          [0, f, IMG_SIZE / 2],
                          [0, 0, 1]], dtype=np.float64)
-    inv_intr_mat = np.linalg.inv(intr_mat)
 
     # ── Auto-align phase ────────────────────────────────────────────────
     if auto_orient:
-        R_align, face_dir_avg, probe_results = _auto_align_phase(
-            renderer, scene, camera, detector, cam_dist, tri_mesh,
+        R_align, _, _ = _auto_align_phase(
+            renderer, detector, cam_dist, tri_mesh,
             n_fibonacci=n_fibonacci, verbose=verbose,
             debug_output_dir=debug_output_dir,
             min_neighbor_support=min_neighbor_support,
@@ -505,32 +563,31 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
         )
         if R_align is not None:
             meshes["orientation_R"] = R_align
-            # Rebuild pyrender mesh for the rotated trimesh
-            scene.remove_node(list(scene.mesh_nodes)[0])
-            py_mesh = pyrender.Mesh.from_trimesh(tri_mesh, smooth=False)
-            scene.add(py_mesh)
+            renderer.upload_mesh(tri_mesh)  # mesh rotated inside _auto_align_phase
 
     # ── Build zone-based camera poses ──────────────────────────────────────
     from .zone_config import ZONE_CAMERAS, ZONE_LANDMARKS, ZONE_NAMES
     from scipy.spatial.transform import Rotation
 
     zone_ids = sorted(ZONE_CAMERAS.keys())
-    poses = []
-    cam_dirs = []
+    eyes = []
+    ups  = []
+    cam_dirs     = []
     cam_rotations = []
-    yaw_degs = []
+    yaw_degs  = []
     pitch_degs = []
 
     for zone_id in zone_ids:
         yaw_deg, pitch_deg = ZONE_CAMERAS[zone_id]
         y = np.radians(yaw_deg)
         x = np.radians(pitch_deg)
-        R_yaw = Rotation.from_euler("Y", y).as_matrix()
+        R_yaw   = Rotation.from_euler("Y", y).as_matrix()
         R_pitch = Rotation.from_euler("X", -x).as_matrix()
-        cam_R = R_pitch @ R_yaw
+        cam_R   = R_pitch @ R_yaw
         eye = (cam_R @ np.array([0, 0, 1])) * cam_dist
-        up = cam_R @ np.array([0, 1, 0])
-        poses.append(_camera_pose(eye, up=up))
+        up  = cam_R @ np.array([0, 1, 0])
+        eyes.append(eye)
+        ups.append(up)
         cam_dirs.append(eye / cam_dist)
         cam_rotations.append(cam_R)
         yaw_degs.append(yaw_deg)
@@ -546,15 +603,15 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
         os_module.makedirs(debug_output_dir, exist_ok=True)
 
     if verbose:
-        print(f"Projecting {len(poses)} zone-based views...", flush=True)
+        print(f"Projecting {len(eyes)} zone-based views...", flush=True)
 
-    for idx, (pose, zone_id) in enumerate(zip(poses, zone_ids)):
+    for idx, zone_id in enumerate(zone_ids):
         zone_lm_set = set(ZONE_LANDMARKS[zone_id])
-        zone_name = ZONE_NAMES[zone_id]
-        yaw_deg = yaw_degs[idx]
-        pitch_deg = pitch_degs[idx]
+        zone_name   = ZONE_NAMES[zone_id]
+        yaw_deg     = yaw_degs[idx]
+        pitch_deg   = pitch_degs[idx]
 
-        img = _render_view(renderer, scene, camera, pose)
+        img = renderer.render(eyes[idx], up=ups[idx])
 
         if debug_output_dir:
             from PIL import Image
@@ -574,7 +631,7 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
         if debug_output_dir:
             from PIL import Image, ImageDraw
             pil_img = Image.fromarray(img.copy())
-            draw = ImageDraw.Draw(pil_img)
+            draw    = ImageDraw.Draw(pil_img)
             for lm in detection_result.face_landmarks[0]:
                 px = int(lm.x * IMG_SIZE); py = int(lm.y * IMG_SIZE)
                 draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=(0, 255, 0))
@@ -584,10 +641,9 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
             )
 
         all_landmarks = detection_result.face_landmarks[0]
-        landmarks_2d = np.array([[p.x, p.y, 0] for p in all_landmarks], dtype=np.float64)
+        landmarks_2d  = np.array([[p.x, p.y, 0] for p in all_landmarks], dtype=np.float64)
 
         persp_rays = _perspective_rays_directions(landmarks_2d, IMG_SIZE, intr_mat)
-
         world_rays = (persp_rays * [1, -1, -1]) @ np.linalg.inv(cam_rotations[idx])
 
         camera_pos = cam_dirs[idx] * cam_dist
@@ -597,18 +653,18 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
             if lm_idx not in zone_lm_set:
                 continue
             lm = all_landmarks[lm_idx]
-            px = max(0, min(int(lm.x * IMG_SIZE), IMG_SIZE - 1))
+            px   = max(0, min(int(lm.x * IMG_SIZE), IMG_SIZE - 1))
             py_img = max(0, min(int(lm.y * IMG_SIZE), IMG_SIZE - 1))
             if np.all(img[py_img, px] > 240):
                 continue
             views[lm_idx].append(np.concatenate([camera_pos, world_rays[lm_idx]]).astype(np.float32))
 
-    del renderer
+    renderer.release()
 
     detected_landmarks = sum(1 for rays in views.values() if len(rays) > 0)
 
     if verbose:
-        print(f"  Detected faces in {detection_count}/{len(poses)} zone views, "
+        print(f"  Detected faces in {detection_count}/{len(eyes)} zone views, "
               f"{detected_landmarks}/478 landmarks covered", flush=True)
 
     if detection_count == 0:
@@ -627,7 +683,7 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
         if len(rays) == 0:
             continue
         rays = np.asarray(rays, dtype=np.float64)
-        origins = rays[:, :3]
+        origins    = rays[:, :3]
         directions = rays[:, 3:6]
 
         locations, index_ray, _ = intersector.intersects_location(
@@ -637,7 +693,8 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
         )
 
         if len(index_ray) > 0:
-            pt = origins[index_ray[0]] + directions[index_ray[0]] * np.linalg.norm(locations[0] - origins[index_ray[0]])
+            pt = origins[index_ray[0]] + directions[index_ray[0]] * np.linalg.norm(
+                locations[0] - origins[index_ray[0]])
             landmark_candidates[i].append(pt)
             landmarks_3d_norm[i] = pt
 
@@ -646,17 +703,17 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
     if len(landmarks_3d_norm) < 100:
         logger.warning(f"Only {len(landmarks_3d_norm)}/478 landmarks detected, results may be incomplete")
 
-    # ── KDTree vertex lookup (in normalized space) ──────────────────────
+    # ── KDTree vertex lookup ─────────────────────────────────────────────
     detected_indices = sorted(landmarks_3d_norm.keys())
-    lm_array_norm = np.array([landmarks_3d_norm[k] for k in detected_indices], dtype=np.float64)
+    lm_array_norm    = np.array([landmarks_3d_norm[k] for k in detected_indices], dtype=np.float64)
 
     tree = scipy.spatial.KDTree(np.asarray(tri_mesh.vertices, dtype=np.float64))
     _, nearest = tree.query(lm_array_norm)
     closest_vertices_ids = {k: int(v) for k, v in zip(detected_indices, nearest)}
 
-    # ── Denormalize back to original coordinates ────────────────────────
-    center = meshes["transform_center"]
-    scale = meshes["transform_scale"]
+    # ── Denormalize back to original coordinates ─────────────────────────
+    center       = meshes["transform_center"]
+    scale        = meshes["transform_scale"]
     orientation_R = meshes.get("orientation_R")
 
     lm_array = lm_array_norm * scale
@@ -670,3 +727,13 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
         print(f"Done. {len(landmarks_3d)} landmarks detected.", flush=True)
 
     return landmarks_3d, closest_vertices_ids, camera_positions, landmark_candidates
+
+
+def _perspective_rays_directions(img_landmarks, size, intrinsic):
+    la = np.asarray(img_landmarks, dtype=np.float64)
+    scaled = la * size
+    h = np.hstack([scaled[:, :2], np.ones((len(scaled), 1))])
+    inv_K = np.linalg.inv(intrinsic)
+    rays = h @ inv_K.T
+    rays /= np.linalg.norm(rays, axis=1, keepdims=True)
+    return rays
