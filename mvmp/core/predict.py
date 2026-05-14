@@ -18,7 +18,13 @@ FOV_DEG = 50.0
 logger = logging.getLogger("mvmp")
 
 # ── pyrender / headless setup ─────────────────────────────────────────────
-os_module.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+# Prefer EGL (GPU-accelerated headless); fall back to OSMesa (CPU software
+# renderer) when libEGL is absent, e.g. on bare CI runners.
+if not os_module.environ.get("PYOPENGL_PLATFORM"):
+    import ctypes, ctypes.util
+    _egl = ctypes.util.find_library("EGL")
+    os_module.environ["PYOPENGL_PLATFORM"] = "egl" if _egl else "osmesa"
+    del ctypes, _egl
 import pyglet
 pyglet.options["shadow_window"] = False
 import pyrender
