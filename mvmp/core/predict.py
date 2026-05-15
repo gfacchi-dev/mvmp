@@ -10,6 +10,7 @@ import json
 import numpy as np
 import scipy
 import moderngl
+from typing import Callable
 
 from .mp_utils import *
 
@@ -554,7 +555,8 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
               camera_distance_multiplier=1.0, auto_orient=True,
               n_fibonacci=100, min_neighbor_support=3,
               max_score_isolation=3.0, max_direction_deviation=30.0,
-              min_direction_support=2):
+              min_direction_support=2,
+              progress_callback: Callable[[float, str], None] | None = None):
     tri_mesh = meshes["trimesh"]
 
     meshes["orientation_R"] = None
@@ -627,6 +629,9 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
     if verbose:
         print(f"Projecting {len(eyes)} zone-based views...", flush=True)
 
+    if progress_callback is not None:
+        progress_callback(0.1, "Rendering viewpoints")
+
     for idx, zone_id in enumerate(zone_ids):
         zone_lm_set = set(ZONE_LANDMARKS[zone_id])
         zone_name   = ZONE_NAMES[zone_id]
@@ -681,6 +686,10 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
                 continue
             views[lm_idx].append(np.concatenate([camera_pos, world_rays[lm_idx]]).astype(np.float32))
 
+        if progress_callback is not None:
+            pct = 0.1 + (idx + 1) / len(zone_ids) * 0.5
+            progress_callback(pct, f"Detecting landmarks (camera {idx + 1}/{len(zone_ids)})")
+
     renderer.release()
 
     detected_landmarks = sum(1 for rays in views.values() if len(rays) > 0)
@@ -695,6 +704,9 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
         logger.warning(f"Only {detected_landmarks}/478 landmarks detected across all zone views.")
 
     # ── Raycast landmarks to mesh surface ───────────────────────────────
+    if progress_callback is not None:
+        progress_callback(0.85, "Triangulating")
+
     if verbose:
         print(f"Raycasting {detected_landmarks} landmarks...", flush=True)
 
@@ -747,6 +759,9 @@ def __predict(meshes, verbose=True, debug_output_dir=None,
 
     if verbose:
         print(f"Done. {len(landmarks_3d)} landmarks detected.", flush=True)
+
+    if progress_callback is not None:
+        progress_callback(0.95, "Completed")
 
     return landmarks_3d, closest_vertices_ids, camera_positions, landmark_candidates
 

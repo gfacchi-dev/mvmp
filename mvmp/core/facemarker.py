@@ -5,6 +5,7 @@ import os
 import json
 import logging
 import numpy as np
+from typing import Callable
 
 from .predict import __predict as _predict_impl
 from .io_utils import import_mesh, meshes_setup
@@ -98,18 +99,23 @@ class Facemarker:
         # Suppress trimesh log spam
         logging.getLogger("trimesh").setLevel(logging.WARNING)
 
-    def predict(self, mesh_path):
+    def predict(self, mesh_path,
+                progress_callback: Callable[[float, str], None] | None = None):
         """
         Detect facial landmarks on a mesh.
 
         Args:
             mesh_path: Path to 3D mesh file (supports .obj, .ply, .stl, .gltf, .glb, .off, etc.)
+            progress_callback: Optional callback(pct, stage) for progress updates.
 
         Returns:
             FacemarkerResult with landmarks_3d, closest_vertices_ids, etc.
         """
         if not os.path.exists(mesh_path):
             raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
+
+        if progress_callback is not None:
+            progress_callback(0.0, "Loading model")
 
         meshes = import_mesh(mesh_path,
                              allow_missing_texture=self.allow_missing_texture)
@@ -125,6 +131,7 @@ class Facemarker:
             max_score_isolation=self.max_score_isolation,
             max_direction_deviation=self.max_direction_deviation,
             min_direction_support=self.min_direction_support,
+            progress_callback=progress_callback,
         )
 
         if landmarks_3d is None or closest_vertices_ids is None:

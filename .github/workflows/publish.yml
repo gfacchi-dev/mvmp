@@ -1,66 +1,28 @@
-name: Build and Publish to PyPI
+name: Publish to PyPI
 
 on:
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version component to bump"
-        required: true
-        default: "patch"
-        type: choice
-        options: [patch, minor, major]
-
-permissions:
-  contents: write
+  push:
+    tags:
+      - "v*"
 
 jobs:
-  build-and-publish:
+  pypi-publish:
+    name: Build and publish to PyPI
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
-    - name: Check out code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
 
-    - name: Install system deps (EGL/GLU for pyrender)
-      run: sudo apt-get update -qq && sudo apt-get install -y -qq libglu1-mesa libegl1-mesa-dev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Set up uv
-      uses: astral-sh/setup-uv@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
 
-    - name: Compute new version
-      id: bump
-      run: |
-        CURRENT=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-        IFS='.' read -r MAJ MIN PAT <<< "$CURRENT"
-        case "${{ inputs.bump }}" in
-          major) NEW="$((MAJ + 1)).0.0" ;;
-          minor) NEW="$MAJ.$((MIN + 1)).0" ;;
-          patch) NEW="$MAJ.$MIN.$((PAT + 1))" ;;
-        esac
-        echo "Bumping $CURRENT → $NEW"
-        echo "version=$NEW" >> $GITHUB_OUTPUT
-        echo "current=$CURRENT" >> $GITHUB_OUTPUT
+      - name: Build package
+        run: uv build
 
-    - name: Apply version bump
-      run: |
-        sed -i "s/^version = \".*\"/version = \"${{ steps.bump.outputs.version }}\"/" pyproject.toml
-        sed -i "s/__version__ = \".*\"/__version__ = \"${{ steps.bump.outputs.version }}\"/" mvmp/__init__.py
-
-    - name: Build
-      run: uv build
-
-    - name: Commit version bump and tag
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add pyproject.toml mvmp/__init__.py
-        git commit -m "Bump version to v${{ steps.bump.outputs.version }}"
-        git tag "v${{ steps.bump.outputs.version }}"
-        git push origin main --tags
-
-    - name: Publish to PyPI
-      env:
-        UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-      run: uv publish
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
