@@ -121,9 +121,12 @@ If you use MVMP in your research or software, please cite it:
 
 ```bibtex
 @software{Facchi_mvmp,
-  author = {Facchi, G. M.},
-  title  = {{mvmp}},
-  url    = {https://github.com/gfacchi-dev/mvmp}
+  author  = {Facchi, Giuseppe Maurizio},
+  title   = {{mvmp: 3D Multi-View MediaPipe}},
+  year    = {2026},
+  version = {v1.4.2},
+  url      = {https://github.com/gfacchi-dev/mvmp},
+  urldate = {2026-05-21}
 }
 ```
 
