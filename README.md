@@ -12,8 +12,6 @@ toward +Z before detection.
 
 **Supported mesh formats:** .obj, .ply, .stl, .gltf, .glb, .off
 
-<img src="./img/pipelineOverview.png">
-
 ## System Requirements
 
 | Platform | OpenGL backend | Notes |
@@ -117,6 +115,17 @@ mvmp mesh.obj --camera-distance 0.8 --no-auto-orient
 1. Fork the repository and create a feature branch.
 2. Make your changes with clear commit messages.
 3. Open a pull request.
+
+## Citation
+If you use MVMP in your research or software, please cite it:
+
+```bibtex
+@software{Facchi_mvmp,
+  author = {Facchi, G. M.},
+  title  = {{mvmp}},
+  url    = {https://github.com/gfacchi-dev/mvmp}
+}
+```
 
 ## License
 
