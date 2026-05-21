@@ -1,0 +1,7 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "mvmp"
+authors:
+  - family-names: "Facchi"
+    given-names: "G. M."
+url: "https://github.com/gfacchi-dev/mvmp"
