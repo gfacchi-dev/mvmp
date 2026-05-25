@@ -132,7 +132,7 @@ If you use MVMP in your research or software, please cite it:
 
 ## License
 
-[MIT License](LICENSE)
+[License](LICENSE)
 
 ## Contact
 
